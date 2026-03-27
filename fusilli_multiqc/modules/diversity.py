@@ -63,7 +63,7 @@ class MultiqcModule(BaseMultiqcModule):
         if self.diversity_metrics is not None and not self.diversity_metrics.empty:
             self.diversity_comparison_plot()
             self.evenness_plot()
-            self.top_n_fractions_plot()
+            self.rank_abundance_plot()
             self.variant_count_distribution_plot()
             self.add_summary_table()
 
@@ -197,7 +197,6 @@ class MultiqcModule(BaseMultiqcModule):
             "ylab": "Diversity Index",
             "xlab": "Sample",
             "stacking": None,
-            "tt_label": "<b>{point.x}</b>: {point.y:.3f}",
         }
 
         self.add_section(
@@ -234,7 +233,6 @@ class MultiqcModule(BaseMultiqcModule):
             "title": "FUSILLI: Library Evenness",
             "ylab": "Evenness (Pielou's)",
             "xlab": "Sample",
-            "tt_label": "<b>{point.x}</b>: {point.y:.3f}",
             "ymax": 1.0,
             "ymin": 0.0,
         }
@@ -251,51 +249,61 @@ class MultiqcModule(BaseMultiqcModule):
             plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
         )
 
-    def top_n_fractions_plot(self) -> None:
-        """Create top N fractions stacked bar chart."""
-        if self.diversity_metrics is None or self.diversity_metrics.empty:
+    def rank_abundance_plot(self) -> None:
+        """Create rank-abundance (Whittaker) curve: one line per sample."""
+        if self.fusion_counts_data is None:
+            return
+
+        fusion_data = self.fusion_counts_data[
+            self.fusion_counts_data["type"] == "fusion"
+        ].copy()
+        if fusion_data.empty:
+            return
+
+        sample_cols = [
+            c for c in fusion_data.columns
+            if c not in ["fusion_id", "type", "total"]
+        ]
+        if not sample_cols:
             return
 
         plot_data = OrderedDict()
-        for _, row in self.diversity_metrics.iterrows():
-            sample = row["sample"]
-            plot_data[sample] = {
-                "Top 1": row["top1_fraction"],
-                "Top 5": row["top5_fraction"] - row["top1_fraction"],
-                "Top 10": row["top10_fraction"] - row["top5_fraction"],
-                "Top 25": row["top25_fraction"] - row["top10_fraction"],
-                "Other": 1.0 - row["top25_fraction"],
-            }
+        for sample in sample_cols:
+            counts = fusion_data[sample].fillna(0).values
+            counts = counts[counts > 0]
+            if len(counts) == 0:
+                continue
+            total = counts.sum()
+            sorted_props = np.sort(counts)[::-1] / total
+            plot_data[sample] = {int(rank + 1): float(p) for rank, p in enumerate(sorted_props)}
 
         if not plot_data:
             return
 
-        categories = list(set().union(*[d.keys() for d in plot_data.values()])) if plot_data else []
-
         pconfig = {
-            "id": "fusilli_top_n_fractions",
-            "title": "FUSILLI: Top N Variant Fractions",
-            "ylab": "Fraction of Total Counts",
-            "xlab": "Sample",
-            "stacking": "normal",
-            "tt_label": "<b>{point.x}</b><br>{series.name}: {point.y:.3f}",
+            "id": "fusilli_rank_abundance",
+            "title": "FUSILLI: Rank-Abundance Curve",
+            "ylab": "Relative Abundance",
+            "xlab": "Variant Rank",
+            "ylog": True,
+            "xlog": True,
+            "ymin": 0.0,
         }
 
         self.add_section(
-            name="Top N Fractions",
-            anchor="fusilli_top_n_fractions",
-            description="Fraction of counts contributed by top N variants.",
+            name="Rank-Abundance",
+            anchor="fusilli_rank_abundance",
+            description="Relative abundance of each variant by rank (most to least abundant).",
             helptext="""
-            This stacked bar chart shows the distribution of counts across variants:
-            - **Top 1**: Fraction from the most abundant variant
-            - **Top 5**: Fraction from variants ranked 2-5
-            - **Top 10**: Fraction from variants ranked 6-10
-            - **Top 25**: Fraction from variants ranked 11-25
-            - **Other**: Fraction from all remaining variants
+            Each line represents one sample. Variants are ranked from most to least abundant
+            (rank 1 = highest count). The y-axis shows each variant's fraction of total counts
+            for that sample (log scale).
 
-            More even distribution (less in Top 1) indicates better library diversity.
+            A steep drop indicates the library is dominated by a few variants; a flatter
+            curve indicates more even representation. Samples with similar curves have
+            similar diversity profiles.
             """,
-            plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
+            plot=linegraph.plot(plot_data, pconfig),
         )
 
     def variant_count_distribution_plot(self) -> None:
@@ -347,7 +355,6 @@ class MultiqcModule(BaseMultiqcModule):
             "title": "FUSILLI: Variant Count Distribution",
             "ylab": "Number of Variants",
             "xlab": "Count (log10 scale)",
-            "tt_label": "<b>{point.x}</b>: {point.y} variants",
         }
 
         self.add_section(

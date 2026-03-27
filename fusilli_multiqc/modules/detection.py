@@ -205,7 +205,6 @@ class MultiqcModule(BaseMultiqcModule):
             "title": "FUSILLI: Variant-called read retention (vs raw)",
             "ylab": "Fraction of raw reads",
             "xlab": "Sample",
-            "tt_label": "<b>{point.x}</b>: {point.y:.4f}",
             "ymax": 1.0,
             "ymin": 0.0,
         }
@@ -249,7 +248,6 @@ class MultiqcModule(BaseMultiqcModule):
             "title": "FUSILLI: Detection Efficiency Metrics",
             "ylab": "Efficiency",
             "xlab": "Sample",
-            "tt_label": "<b>{point.x}</b>: {point.y:.3f}",
             "data_labels": [
                 {"name": "Detection Efficiency", "ylab": "Efficiency"},
             ],
@@ -269,37 +267,41 @@ class MultiqcModule(BaseMultiqcModule):
         )
 
     def coverage_plot(self) -> None:
-        """Create library coverage stacked bar chart."""
+        """Create library coverage line plot."""
         if self.fusion_qc_data is None or "sample" not in self.fusion_qc_data.columns:
             return
 
+        # Each coverage metric becomes a line; samples are on the x-axis.
+        # MultiQC linegraph: data = {series_name: {x_label: y_value}}
+        coverage_metrics = [
+            ("variant_coverage", "Variant Coverage"),
+            ("breakpoint_coverage", "Breakpoint Coverage"),
+            ("partner_coverage", "Partner Coverage"),
+        ]
+
         plot_data = OrderedDict()
-        for _, row in self.fusion_qc_data.iterrows():
-            sample = row["sample"]
-            plot_data[sample] = {}
-            if "variant_coverage" in row:
-                plot_data[sample]["Variant Coverage"] = row["variant_coverage"]
-            if "breakpoint_coverage" in row:
-                plot_data[sample]["Breakpoint Coverage"] = row["breakpoint_coverage"]
-            if "partner_coverage" in row:
-                plot_data[sample]["Partner Coverage"] = row["partner_coverage"]
+        for col, label in coverage_metrics:
+            if col not in self.fusion_qc_data.columns:
+                continue
+            series = OrderedDict()
+            for _, row in self.fusion_qc_data.iterrows():
+                val = row[col]
+                if hasattr(val, "item"):
+                    val = val.item()
+                series[row["sample"]] = float(val)
+            if series:
+                plot_data[label] = series
 
         if not plot_data:
             return
-
-        # Collect all categories that appear in the data
-        all_categories = set()
-        for sample_data in plot_data.values():
-            all_categories.update(sample_data.keys())
-        categories = list(all_categories)
 
         pconfig = {
             "id": "fusilli_library_coverage",
             "title": "FUSILLI: Library Coverage Metrics",
             "ylab": "Coverage Fraction",
             "xlab": "Sample",
-            "stacking": None,
-            "tt_label": "<b>{point.x}</b>: {point.y:.3f}",
+            "ymax": 1.0,
+            "ymin": 0.0,
         }
 
         self.add_section(
@@ -317,7 +319,7 @@ class MultiqcModule(BaseMultiqcModule):
             fusion-only QC. If unfused variants were included, observed_variants would be
             unique_fusions + unique_unfused (total variant types with ≥1 read).
             """,
-            plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
+            plot=linegraph.plot(plot_data, pconfig),
         )
 
     def sensitivity_plot(self) -> None:

@@ -164,21 +164,22 @@ class MultiqcModule(BaseMultiqcModule):
 
         # Prepare data for line plot
         # MultiQC 1.33 expects data as dict of sample -> dict of x -> y
-        # Pipeline order: raw -> cleaned -> trimmed -> quality -> merged
+        # Use numeric indices so the x-axis respects pipeline order,
+        # then map to labels via categories.
         plot_data = OrderedDict()
         steps = ["raw", "cleaned", "trimmed", "quality", "merged"]
 
         for sample in self.decay_data["sample"].unique():
             sample_data = self.decay_data[self.decay_data["sample"] == sample]
             sample_dict = OrderedDict()
-            for step in steps:
+            for idx, step in enumerate(steps):
                 step_row = sample_data[sample_data["step"] == step]
                 if not step_row.empty:
                     reads = step_row.iloc[0]["reads"]
                     # Convert to native Python type (not numpy)
                     if hasattr(reads, 'item'):
                         reads = reads.item()
-                    sample_dict[step] = float(reads)
+                    sample_dict[idx] = float(reads)
             if sample_dict:
                 plot_data[sample] = sample_dict
 
@@ -190,6 +191,7 @@ class MultiqcModule(BaseMultiqcModule):
             "title": "FUSILLI: Read Decay Through Preprocessing",
             "ylab": "Number of Reads",
             "xlab": "Preprocessing Step",
+            "categories": steps,
             "tt_label": "<b>{point.x}</b><br>{point.y:,.0f} reads",
             "ylog": True,
         }
@@ -245,7 +247,6 @@ class MultiqcModule(BaseMultiqcModule):
             "ylab": "Retention Rate",
             "xlab": "Sample",
             "stacking": None,
-            "tt_label": "<b>{point.x}</b><br>{series.name}: {point.y:.3f}",
             "ymax": 1.0,
             "ymin": 0.0,
         }
@@ -314,7 +315,6 @@ class MultiqcModule(BaseMultiqcModule):
             "ylab": "Fraction of Raw Reads",
             "xlab": "Sample",
             "stacking": "normal",
-            "tt_label": "<b>{point.x}</b><br>{series.name}: {point.y:.3f}",
         }
 
         self.add_section(

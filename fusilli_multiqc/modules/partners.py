@@ -171,6 +171,7 @@ class MultiqcModule(BaseMultiqcModule):
             "square": False,
             "cluster_rows": False,
             "cluster_cols": False,
+            "xcats_samples": False,
             "colstops": [[0, "#ffffff"], [1, "#1f77b4"]],
         }
 
@@ -185,7 +186,7 @@ class MultiqcModule(BaseMultiqcModule):
 
             Partners are sorted by detection frequency (most common first).
             """,
-            plot=heatmap.plot(heatmap_data, pconfig),
+            plot=heatmap.plot(heatmap_data, pconfig=pconfig),
         )
 
     def partner_coverage_plot(self) -> None:
