@@ -83,6 +83,7 @@ class MultiqcModule(BaseMultiqcModule):
         # Generate plots
         if self.decay_data is not None:
             self.read_decay_plot()
+            self.base_decay_plot()
 
         if self.retention_data is not None and not self.retention_data.empty:
             # Only create plots if we have valid retention data
@@ -105,10 +106,9 @@ class MultiqcModule(BaseMultiqcModule):
         """
         Calculate retention rates for each preprocessing step.
 
-        For steps trimmed/cleaned/quality, retention = reads at step / raw reads.
-        For the merged step, the raw count drops by design (two reads become one),
-        so we report merge rate instead: (2 * merged_reads) / quality_reads,
-        i.e. the fraction of pairs that successfully merged.
+        decay_metrics.csv stores all values in read pairs: pre-merge steps divide
+        the combined R1+R2 count by 2; the merged step reports joined pairs directly.
+        Retention is therefore simply pairs_at_step / raw_pairs for every step.
 
         Returns:
             DataFrame with columns: sample, step, retention_rate, or None if no data
@@ -116,20 +116,14 @@ class MultiqcModule(BaseMultiqcModule):
         if self.decay_data is None:
             return None
 
-        # Get raw reads for each sample
         raw_data = self.decay_data[self.decay_data["step"] == "raw"].copy()
         if raw_data.empty:
             return None
 
         raw_reads = dict(zip(raw_data["sample"], raw_data["reads"]))
 
-        # Quality reads for merge-rate calculation (merged step only)
-        quality_data = self.decay_data[self.decay_data["step"] == "quality"].copy()
-        quality_reads = dict(zip(quality_data["sample"], quality_data["reads"]))
-
-        # Calculate retention rates for each step
         retention_list = []
-        steps = ["trimmed", "cleaned", "quality", "merged"]
+        steps = ["trimmed", "cleaned", "quality", "merged", "matched"]
 
         for step in steps:
             step_data = self.decay_data[self.decay_data["step"] == step].copy()
@@ -137,15 +131,7 @@ class MultiqcModule(BaseMultiqcModule):
                 sample = row["sample"]
                 reads = row["reads"]
                 raw = raw_reads.get(sample, 0)
-                if step == "merged":
-                    # Report merge rate: fraction of pairs that merged
-                    # (2 * merged_reads) / quality_reads, not merged/raw
-                    quality = quality_reads.get(sample, 0)
-                    retention = (
-                        (2.0 * reads / quality) if quality > 0 else 0.0
-                    )
-                else:
-                    retention = (reads / raw) if raw > 0 else 0.0
+                retention = (reads / raw) if raw > 0 else 0.0
                 retention_list.append({
                     "sample": sample,
                     "step": step,
@@ -167,19 +153,19 @@ class MultiqcModule(BaseMultiqcModule):
         # Use numeric indices so the x-axis respects pipeline order,
         # then map to labels via categories.
         plot_data = OrderedDict()
-        steps = ["raw", "cleaned", "trimmed", "quality", "merged"]
+        steps = ["raw", "cleaned", "trimmed", "quality", "merged", "matched"]
 
         for sample in self.decay_data["sample"].unique():
             sample_data = self.decay_data[self.decay_data["sample"] == sample]
             sample_dict = OrderedDict()
-            for idx, step in enumerate(steps):
+            for step in steps:
                 step_row = sample_data[sample_data["step"] == step]
                 if not step_row.empty:
                     reads = step_row.iloc[0]["reads"]
                     # Convert to native Python type (not numpy)
                     if hasattr(reads, 'item'):
                         reads = reads.item()
-                    sample_dict[idx] = float(reads)
+                    sample_dict[step] = float(reads)
             if sample_dict:
                 plot_data[sample] = sample_dict
 
@@ -191,7 +177,7 @@ class MultiqcModule(BaseMultiqcModule):
             "title": "FUSILLI: Read Decay Through Preprocessing",
             "ylab": "Number of Reads",
             "xlab": "Preprocessing Step",
-            "categories": steps,
+            "categories": True,
             "tt_label": "<b>{point.x}</b><br>{point.y:,.0f} reads",
             "ylog": True,
         }
@@ -199,17 +185,79 @@ class MultiqcModule(BaseMultiqcModule):
         self.add_section(
             name="Read Decay",
             anchor="fusilli_read_decay",
-            description="Read counts at each preprocessing step (log scale).",
+            description="Read pairs at each preprocessing and detection step (log scale).",
             helptext="""
-            This plot shows how read counts change through the preprocessing pipeline
-            (in order: raw → cleaned → trimmed → quality → merged):
-            - **raw**: Initial read count
-            - **cleaned**: After contaminant removal
-            - **trimmed**: After adapter trimming
-            - **quality**: After quality filtering
-            - **merged**: Merged read count (one per pair). A drop of ~50% vs quality
-              is expected because two reads are combined into one; this is not loss.
-            The y-axis is on a log scale to better visualize the decay pattern.
+            This plot shows read pair counts through the full pipeline
+            (in order: raw → cleaned → trimmed → quality → merged → matched).
+            All values are in **read pairs**: pre-merge steps divide the combined
+            R1+R2 count by 2; the merged and matched steps count individual reads/detections.
+            With a high merge rate the line should remain nearly flat into the merged step.
+            The drop to **matched** reflects the fraction of reads assigned to a fusion variant.
+            - **raw**: Initial fragment pairs
+            - **cleaned**: Pairs after contaminant removal
+            - **trimmed**: Pairs after adapter trimming
+            - **quality**: Pairs after quality filtering
+            - **merged**: Pairs that successfully merged into a single read
+            - **matched**: Merged reads matched to a fusion breakpoint
+            """,
+            plot=linegraph.plot(plot_data, pconfig),
+        )
+
+    def base_decay_plot(self) -> None:
+        """Create base decay line plot through preprocessing steps."""
+        if self.decay_data is None:
+            return
+
+        if "bases" not in self.decay_data.columns:
+            return
+
+        steps = ["raw", "cleaned", "trimmed", "quality", "merged"]
+        plot_data = OrderedDict()
+
+        for sample in self.decay_data["sample"].unique():
+            sample_data = self.decay_data[self.decay_data["sample"] == sample]
+            sample_dict = OrderedDict()
+            for step in steps:
+                step_row = sample_data[sample_data["step"] == step]
+                if not step_row.empty:
+                    bases = step_row.iloc[0]["bases"]
+                    if pd.notna(bases):
+                        val = bases
+                        if hasattr(val, 'item'):
+                            val = val.item()
+                        sample_dict[step] = float(val)
+            if sample_dict:
+                plot_data[sample] = sample_dict
+
+        if not plot_data:
+            return
+
+        pconfig = {
+            "id": "fusilli_base_decay",
+            "title": "FUSILLI: Base Decay Through Preprocessing",
+            "ylab": "Number of Bases",
+            "xlab": "Preprocessing Step",
+            "categories": True,
+            "tt_label": "<b>{point.x}</b><br>{point.y:,.0f} bases",
+            "ylog": True,
+        }
+
+        self.add_section(
+            name="Base Decay",
+            anchor="fusilli_base_decay",
+            description="Total bases at each preprocessing step (log scale).",
+            helptext="""
+            This plot shows total base counts through the preprocessing steps.
+            Unlike read pairs, bases from R1 and R2 are tracked independently
+            (i.e., not normalized — each read's bases are legitimately distinct).
+
+            A larger drop in bases compared to reads at a given step indicates
+            that shorter reads are being preferentially removed or trimmed.
+            - **raw**: Total input bases across all reads
+            - **cleaned**: Bases after contaminant removal
+            - **trimmed**: Bases after adapter trimming (includes length reduction)
+            - **quality**: Bases after quality filtering
+            - **merged**: Bases in successfully merged reads
             """,
             plot=linegraph.plot(plot_data, pconfig),
         )
@@ -235,7 +283,7 @@ class MultiqcModule(BaseMultiqcModule):
             return
 
         # Use explicit pipeline order so bars render as grouped (not overlapping)
-        categories = ["trimmed", "cleaned", "quality", "merged"]
+        categories = ["trimmed", "cleaned", "quality", "merged", "matched"]
 
         if not categories or not plot_data:
             logger.debug("No retention rate data to plot")
@@ -283,7 +331,7 @@ class MultiqcModule(BaseMultiqcModule):
 
             # Calculate loss at each step
             prev_retention = 1.0
-            for step in ["trimmed", "cleaned", "quality", "merged"]:
+            for step in ["trimmed", "cleaned", "quality", "merged", "matched"]:
                 step_row = sample_data[sample_data["step"] == step]
                 if not step_row.empty:
                     retention = step_row.iloc[0]["retention_rate"]

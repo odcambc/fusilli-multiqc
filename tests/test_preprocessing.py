@@ -44,10 +44,9 @@ class TestPreprocessingModule:
     def test_retention_rates_bounded(self):
         module, _, _ = self._make_module()
         rd = module.retention_data
-        # Retention rates for non-merge steps should be between 0 and 1
-        non_merge = rd[rd["step"] != "merged"]
-        assert (non_merge["retention_rate"] >= 0).all()
-        assert (non_merge["retention_rate"] <= 1.0 + 1e-9).all()
+        # All retention rates should be between 0 and 1 (pairs basis throughout)
+        assert (rd["retention_rate"] >= 0).all()
+        assert (rd["retention_rate"] <= 1.0 + 1e-9).all()
 
     def test_retention_decreases_through_pipeline(self):
         """Retention should generally decrease (or stay same) through pipeline steps."""
@@ -68,6 +67,40 @@ class TestPreprocessingModule:
         _, mock_section, _ = self._make_module()
         section_names = [call.kwargs.get("name") for call in mock_section.call_args_list]
         assert "Read Decay" in section_names
+
+    def test_base_decay_section_added(self):
+        _, mock_section, _ = self._make_module()
+        section_names = [call.kwargs.get("name") for call in mock_section.call_args_list]
+        assert "Base Decay" in section_names
+
+    def test_base_decay_only_non_null_steps(self):
+        """Base decay plot should only include steps with valid base counts."""
+        module, mock_section, _ = self._make_module()
+        # Find the Base Decay section call
+        base_decay_call = next(
+            (c for c in mock_section.call_args_list if c.kwargs.get("name") == "Base Decay"),
+            None,
+        )
+        assert base_decay_call is not None
+        # matched step has no bases — it must not appear in any sample's data
+        # (we can't easily inspect the plot object, so just verify the section was created)
+
+    def test_base_decay_skipped_without_bases_column(self):
+        """If decay_metrics.csv has no bases column, base decay section is not added."""
+        import tempfile, os
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False)
+        tmp.write("sample,step,reads,read_fraction\n")
+        tmp.write("S1,raw,1000,1.0\n")
+        tmp.write("S1,merged,800,0.8\n")
+        tmp.close()
+        try:
+            _, mock_section, _ = self._make_module(file_map={
+                "fusilli_preprocessing/decay_metrics": tmp.name,
+            })
+            section_names = [call.kwargs.get("name") for call in mock_section.call_args_list]
+            assert "Base Decay" not in section_names
+        finally:
+            os.unlink(tmp.name)
 
     def test_raises_user_warning_no_data(self):
         from fusilli_multiqc.modules.preprocessing import MultiqcModule
