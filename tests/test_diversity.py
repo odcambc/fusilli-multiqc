@@ -74,7 +74,7 @@ class TestDiversityModule:
         section_names = [call.kwargs.get("name") for call in mock_section.call_args_list]
         assert "Diversity Comparison" in section_names
         assert "Evenness" in section_names
-        assert "Top N Fractions" in section_names
+        assert "Rank-Abundance" in section_names
 
     def test_raises_user_warning_no_data(self):
         from fusilli_multiqc.modules.diversity import MultiqcModule
