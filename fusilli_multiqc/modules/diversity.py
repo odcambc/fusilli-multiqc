@@ -10,20 +10,23 @@ This module visualizes:
 
 import logging
 from collections import OrderedDict
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 
-from multiqc.modules.base_module import BaseModule
+from multiqc.base_module import BaseMultiqcModule
 from multiqc.plots import linegraph, bargraph, scatter
 
 from fusilli_multiqc.utils import parse_csv_file
 
 logger = logging.getLogger(__name__)
 
+import os
 
-class MultiqcModule(BaseModule):
+
+class MultiqcModule(BaseMultiqcModule):
     """
     FUSILLI Diversity Metrics Module
 
@@ -41,10 +44,12 @@ class MultiqcModule(BaseModule):
         # Find and parse input files
         self.fusion_counts_data = None
 
-        # Find fusion_counts_summary.csv
-        for f in self.find_log_files("fusion_counts_summary.csv"):
-            self.fusion_counts_data = parse_csv_file(f["fn"])
+        # Search for fusion_counts_summary.csv using registered pattern
+        for f in self.find_log_files("fusilli_diversity/fusion_counts"):
+            file_path = os.path.join(f["root"], f["fn"])
+            self.fusion_counts_data = parse_csv_file(file_path)
             if self.fusion_counts_data is not None:
+                self.add_data_source(f)
                 break
 
         # If no data found, exit
@@ -180,6 +185,12 @@ class MultiqcModule(BaseModule):
         if not plot_data:
             return
 
+        # Collect all categories
+        all_categories = set()
+        for sample_data in plot_data.values():
+            all_categories.update(sample_data.keys())
+        categories = list(all_categories)
+
         pconfig = {
             "id": "fusilli_diversity_comparison",
             "title": "FUSILLI: Diversity Index Comparison",
@@ -200,7 +211,7 @@ class MultiqcModule(BaseModule):
 
             Higher values indicate greater library diversity.
             """,
-            plot=bargraph.plot(plot_data, pconfig),
+            plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
         )
 
     def evenness_plot(self) -> None:
@@ -216,14 +227,16 @@ class MultiqcModule(BaseModule):
         if not plot_data:
             return
 
+        categories = list(set().union(*[d.keys() for d in plot_data.values()])) if plot_data else []
+
         pconfig = {
             "id": "fusilli_evenness",
             "title": "FUSILLI: Library Evenness",
             "ylab": "Evenness (Pielou's)",
             "xlab": "Sample",
             "tt_label": "<b>{point.x}</b>: {point.y:.3f}",
-            "max": 1.0,
-            "min": 0.0,
+            "ymax": 1.0,
+            "ymin": 0.0,
         }
 
         self.add_section(
@@ -235,7 +248,7 @@ class MultiqcModule(BaseModule):
             Values range from 0 (highly uneven) to 1 (perfectly even).
             Higher evenness indicates more uniform representation of variants.
             """,
-            plot=bargraph.plot(plot_data, pconfig),
+            plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
         )
 
     def top_n_fractions_plot(self) -> None:
@@ -256,6 +269,8 @@ class MultiqcModule(BaseModule):
 
         if not plot_data:
             return
+
+        categories = list(set().union(*[d.keys() for d in plot_data.values()])) if plot_data else []
 
         pconfig = {
             "id": "fusilli_top_n_fractions",
@@ -280,7 +295,7 @@ class MultiqcModule(BaseModule):
 
             More even distribution (less in Top 1) indicates better library diversity.
             """,
-            plot=bargraph.plot(plot_data, pconfig),
+            plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
         )
 
     def variant_count_distribution_plot(self) -> None:
@@ -325,6 +340,8 @@ class MultiqcModule(BaseModule):
             bin_label = f"10^{bin_edges[i]:.1f} - 10^{bin_edges[i+1]:.1f}"
             plot_data[bin_label] = {"Count": int(hist[i])}
 
+        categories = list(set().union(*[d.keys() for d in plot_data.values()])) if plot_data else []
+
         pconfig = {
             "id": "fusilli_variant_distribution",
             "title": "FUSILLI: Variant Count Distribution",
@@ -342,7 +359,7 @@ class MultiqcModule(BaseModule):
             The x-axis is on a log10 scale to better visualize the wide range of counts.
             A more uniform distribution indicates better library representation.
             """,
-            plot=bargraph.plot(plot_data, pconfig),
+            plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
         )
 
     def add_summary_table(self) -> None:
@@ -365,8 +382,8 @@ class MultiqcModule(BaseModule):
             "title": "Evenness",
             "description": "Pielou's evenness index",
             "format": "{:.3f}",
-            "max": 1.0,
-            "min": 0.0,
+            "ymax": 1.0,
+            "ymin": 0.0,
         }
         headers["observed_variants"] = {
             "title": "Observed Variants",
@@ -374,4 +391,10 @@ class MultiqcModule(BaseModule):
             "format": "{:,.0f}",
         }
 
-        self.general_stats_addcols(self.diversity_metrics, headers)
+        # Ensure DataFrame has 'sample' column as index for general_stats_addcols
+        if "sample" in self.diversity_metrics.columns:
+            stats_data = self.diversity_metrics.set_index("sample")
+        else:
+            stats_data = self.diversity_metrics
+
+        self.general_stats_addcols(stats_data, headers)

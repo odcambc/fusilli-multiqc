@@ -9,19 +9,22 @@ This module visualizes:
 
 import logging
 from collections import OrderedDict
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
-from multiqc.modules.base_module import BaseModule
+from multiqc.base_module import BaseMultiqcModule
 from multiqc.plots import linegraph, bargraph
 
 from fusilli_multiqc.utils import parse_csv_file
 
 logger = logging.getLogger(__name__)
 
+import os
 
-class MultiqcModule(BaseModule):
+
+class MultiqcModule(BaseMultiqcModule):
     """
     FUSILLI Preprocessing Metrics Module
 
@@ -43,25 +46,30 @@ class MultiqcModule(BaseModule):
         self.contam_data = None
         self.quality_data = None
 
-        # Find decay_metrics.csv
-        for f in self.find_log_files("decay_metrics.csv"):
-            self.decay_data = parse_csv_file(f["fn"])
+        # Search for decay_metrics.csv using registered pattern
+        for f in self.find_log_files("fusilli_preprocessing/decay_metrics"):
+            file_path = os.path.join(f["root"], f["fn"])
+            self.decay_data = parse_csv_file(file_path)
             if self.decay_data is not None:
+                self.add_data_source(f)
                 break
 
-        # Find step-specific metrics
-        for f in self.find_log_files("trim_metrics.csv"):
-            self.trim_data = parse_csv_file(f["fn"])
+        # Search for step-specific metrics (optional)
+        for f in self.find_log_files("fusilli_preprocessing/trim_metrics"):
+            file_path = os.path.join(f["root"], f["fn"])
+            self.trim_data = parse_csv_file(file_path)
             if self.trim_data is not None:
                 break
 
-        for f in self.find_log_files("contam_metrics.csv"):
-            self.contam_data = parse_csv_file(f["fn"])
+        for f in self.find_log_files("fusilli_preprocessing/contam_metrics"):
+            file_path = os.path.join(f["root"], f["fn"])
+            self.contam_data = parse_csv_file(file_path)
             if self.contam_data is not None:
                 break
 
-        for f in self.find_log_files("quality_metrics.csv"):
-            self.quality_data = parse_csv_file(f["fn"])
+        for f in self.find_log_files("fusilli_preprocessing/quality_metrics"):
+            file_path = os.path.join(f["root"], f["fn"])
+            self.quality_data = parse_csv_file(file_path)
             if self.quality_data is not None:
                 break
 
@@ -77,13 +85,30 @@ class MultiqcModule(BaseModule):
             self.read_decay_plot()
 
         if self.retention_data is not None and not self.retention_data.empty:
-            self.retention_rate_plot()
-            self.step_loss_plot()
-            self.add_summary_table()
+            # Only create plots if we have valid retention data
+            try:
+                self.retention_rate_plot()
+            except (ValueError, KeyError) as e:
+                logger.warning(f"Could not create retention rate plot: {e}")
+
+            try:
+                self.step_loss_plot()
+            except (ValueError, KeyError) as e:
+                logger.warning(f"Could not create step loss plot: {e}")
+
+            try:
+                self.add_summary_table()
+            except (ValueError, KeyError) as e:
+                logger.warning(f"Could not add summary table: {e}")
 
     def calculate_retention_rates(self) -> Optional[pd.DataFrame]:
         """
         Calculate retention rates for each preprocessing step.
+
+        For steps trimmed/cleaned/quality, retention = reads at step / raw reads.
+        For the merged step, the raw count drops by design (two reads become one),
+        so we report merge rate instead: (2 * merged_reads) / quality_reads,
+        i.e. the fraction of pairs that successfully merged.
 
         Returns:
             DataFrame with columns: sample, step, retention_rate, or None if no data
@@ -98,6 +123,10 @@ class MultiqcModule(BaseModule):
 
         raw_reads = dict(zip(raw_data["sample"], raw_data["reads"]))
 
+        # Quality reads for merge-rate calculation (merged step only)
+        quality_data = self.decay_data[self.decay_data["step"] == "quality"].copy()
+        quality_reads = dict(zip(quality_data["sample"], quality_data["reads"]))
+
         # Calculate retention rates for each step
         retention_list = []
         steps = ["trimmed", "cleaned", "quality", "merged"]
@@ -108,7 +137,15 @@ class MultiqcModule(BaseModule):
                 sample = row["sample"]
                 reads = row["reads"]
                 raw = raw_reads.get(sample, 0)
-                retention = (reads / raw) if raw > 0 else 0.0
+                if step == "merged":
+                    # Report merge rate: fraction of pairs that merged
+                    # (2 * merged_reads) / quality_reads, not merged/raw
+                    quality = quality_reads.get(sample, 0)
+                    retention = (
+                        (2.0 * reads / quality) if quality > 0 else 0.0
+                    )
+                else:
+                    retention = (reads / raw) if raw > 0 else 0.0
                 retention_list.append({
                     "sample": sample,
                     "step": step,
@@ -126,17 +163,24 @@ class MultiqcModule(BaseModule):
             return
 
         # Prepare data for line plot
+        # MultiQC 1.33 expects data as dict of sample -> dict of x -> y
+        # Pipeline order: raw -> cleaned -> trimmed -> quality -> merged
         plot_data = OrderedDict()
-        steps = ["raw", "trimmed", "cleaned", "quality", "merged"]
+        steps = ["raw", "cleaned", "trimmed", "quality", "merged"]
 
         for sample in self.decay_data["sample"].unique():
             sample_data = self.decay_data[self.decay_data["sample"] == sample]
-            plot_data[sample] = {}
+            sample_dict = OrderedDict()
             for step in steps:
                 step_row = sample_data[sample_data["step"] == step]
                 if not step_row.empty:
                     reads = step_row.iloc[0]["reads"]
-                    plot_data[sample][step] = reads
+                    # Convert to native Python type (not numpy)
+                    if hasattr(reads, 'item'):
+                        reads = reads.item()
+                    sample_dict[step] = float(reads)
+            if sample_dict:
+                plot_data[sample] = sample_dict
 
         if not plot_data:
             return
@@ -147,7 +191,7 @@ class MultiqcModule(BaseModule):
             "ylab": "Number of Reads",
             "xlab": "Preprocessing Step",
             "tt_label": "<b>{point.x}</b><br>{point.y:,.0f} reads",
-            "yLog": True,
+            "ylog": True,
         }
 
         self.add_section(
@@ -155,13 +199,14 @@ class MultiqcModule(BaseModule):
             anchor="fusilli_read_decay",
             description="Read counts at each preprocessing step (log scale).",
             helptext="""
-            This plot shows how read counts change through the preprocessing pipeline:
+            This plot shows how read counts change through the preprocessing pipeline
+            (in order: raw → cleaned → trimmed → quality → merged):
             - **raw**: Initial read count
-            - **trimmed**: After adapter trimming
             - **cleaned**: After contaminant removal
+            - **trimmed**: After adapter trimming
             - **quality**: After quality filtering
-            - **merged**: After read merging
-
+            - **merged**: Merged read count (one per pair). A drop of ~50% vs quality
+              is expected because two reads are combined into one; this is not loss.
             The y-axis is on a log scale to better visualize the decay pattern.
             """,
             plot=linegraph.plot(plot_data, pconfig),
@@ -178,9 +223,20 @@ class MultiqcModule(BaseModule):
             step = row["step"]
             if sample not in plot_data:
                 plot_data[sample] = {}
-            plot_data[sample][step] = row["retention_rate"]
+            # Convert to native Python type
+            retention_rate = row["retention_rate"]
+            if hasattr(retention_rate, 'item'):
+                retention_rate = retention_rate.item()
+            plot_data[sample][step] = float(retention_rate)
 
         if not plot_data:
+            return
+
+        # Use explicit pipeline order so bars render as grouped (not overlapping)
+        categories = ["trimmed", "cleaned", "quality", "merged"]
+
+        if not categories or not plot_data:
+            logger.debug("No retention rate data to plot")
             return
 
         pconfig = {
@@ -190,8 +246,8 @@ class MultiqcModule(BaseModule):
             "xlab": "Sample",
             "stacking": None,
             "tt_label": "<b>{point.x}</b><br>{series.name}: {point.y:.3f}",
-            "max": 1.0,
-            "min": 0.0,
+            "ymax": 1.0,
+            "ymin": 0.0,
         }
 
         self.add_section(
@@ -203,11 +259,13 @@ class MultiqcModule(BaseModule):
             - **trimmed**: Retention after adapter trimming
             - **cleaned**: Retention after contaminant removal
             - **quality**: Retention after quality filtering
-            - **merged**: Retention after read merging (fraction of reads that merged)
+            - **merged**: Merge rate (fraction of pairs that successfully merged),
+              i.e. 2×merged_reads / quality_reads. ~50% read count drop at merge
+              is expected; here we show merge success, not read retention.
 
             Higher retention rates indicate less aggressive filtering.
             """,
-            plot=bargraph.plot(plot_data, pconfig),
+            plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
         )
 
     def step_loss_plot(self) -> None:
@@ -220,7 +278,7 @@ class MultiqcModule(BaseModule):
             sample_data = self.retention_data[
                 self.retention_data["sample"] == sample
             ]
-            plot_data[sample] = {}
+            sample_dict = {}
 
             # Calculate loss at each step
             prev_retention = 1.0
@@ -228,13 +286,26 @@ class MultiqcModule(BaseModule):
                 step_row = sample_data[sample_data["step"] == step]
                 if not step_row.empty:
                     retention = step_row.iloc[0]["retention_rate"]
+                    # Convert to native Python type
+                    if hasattr(retention, 'item'):
+                        retention = retention.item()
+                    retention = float(retention)
                     loss = prev_retention - retention
-                    plot_data[sample][step] = loss
+                    sample_dict[step] = float(loss)
                     prev_retention = retention
                 else:
-                    plot_data[sample][step] = 0.0
+                    sample_dict[step] = 0.0
+
+            if sample_dict:
+                plot_data[sample] = sample_dict
 
         if not plot_data:
+            return
+
+        # Use explicit pipeline order
+        categories = ["trimmed", "cleaned", "quality", "merged"]
+
+        if not categories:
             return
 
         pconfig = {
@@ -255,11 +326,12 @@ class MultiqcModule(BaseModule):
             - **trimmed**: Loss during adapter trimming
             - **cleaned**: Additional loss during contaminant removal
             - **quality**: Additional loss during quality filtering
-            - **merged**: Additional loss during read merging (unmerged reads)
+            - **merged**: Fraction of pairs that did not merge (1 − merge rate).
+              The expected ~50% drop in read count at merge is not shown as loss.
 
             The total height shows the final retention rate.
             """,
-            plot=bargraph.plot(plot_data, pconfig),
+            plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
         )
 
     def add_summary_table(self) -> None:
@@ -277,11 +349,17 @@ class MultiqcModule(BaseModule):
 
         headers = OrderedDict()
         headers["retention_rate"] = {
-            "title": "Final Retention",
-            "description": "Fraction of raw reads retained after all preprocessing",
+            "title": "Merge Rate",
+            "description": "Fraction of pairs that merged (merged step); earlier steps show read retention",
             "format": "{:.3f}",
-            "max": 1.0,
-            "min": 0.0,
+            "ymax": 1.0,
+            "ymin": 0.0,
         }
 
-        self.general_stats_addcols(merged_data, headers)
+        # Ensure DataFrame has 'sample' column as index for general_stats_addcols
+        if "sample" in merged_data.columns:
+            stats_data = merged_data.set_index("sample")
+        else:
+            stats_data = merged_data
+
+        self.general_stats_addcols(stats_data, headers)

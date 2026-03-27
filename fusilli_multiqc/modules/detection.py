@@ -9,16 +9,19 @@ This module visualizes:
 
 import logging
 from collections import OrderedDict
+from pathlib import Path
 
-from multiqc.modules.base_module import BaseModule
+from multiqc.base_module import BaseMultiqcModule
 from multiqc.plots import linegraph, bargraph, scatter
 
 from fusilli_multiqc.utils import parse_csv_file
 
 logger = logging.getLogger(__name__)
 
+import os
 
-class MultiqcModule(BaseModule):
+
+class MultiqcModule(BaseMultiqcModule):
     """
     FUSILLI Detection Metrics Module
 
@@ -39,37 +42,57 @@ class MultiqcModule(BaseModule):
         self.sensitivity_data = None
         self.fusion_counts_data = None
 
-        # Find fusion_qc_metrics.csv
-        for f in self.find_log_files("fusion_qc_metrics.csv"):
-            self.fusion_qc_data = parse_csv_file(f["fn"])
+        # Search for files using registered patterns
+        for f in self.find_log_files("fusilli_detection/fusion_qc_metrics"):
+            file_path = os.path.join(f["root"], f["fn"])
+            self.fusion_qc_data = parse_csv_file(file_path)
             if self.fusion_qc_data is not None:
+                self.add_data_source(f)
                 break
 
-        # Find sensitivity_metrics.csv
-        for f in self.find_log_files("sensitivity_metrics.csv"):
-            self.sensitivity_data = parse_csv_file(f["fn"])
+        for f in self.find_log_files("fusilli_detection/sensitivity_metrics"):
+            file_path = os.path.join(f["root"], f["fn"])
+            self.sensitivity_data = parse_csv_file(file_path)
             if self.sensitivity_data is not None:
+                self.add_data_source(f)
                 break
 
-        # Find fusion_counts_summary.csv
-        for f in self.find_log_files("fusion_counts_summary.csv"):
-            self.fusion_counts_data = parse_csv_file(f["fn"])
+        for f in self.find_log_files("fusilli_detection/fusion_counts"):
+            file_path = os.path.join(f["root"], f["fn"])
+            self.fusion_counts_data = parse_csv_file(file_path)
             if self.fusion_counts_data is not None:
+                self.add_data_source(f)
                 break
+
+        # Optional: decay_metrics for variant-called read retention (vs raw)
+        self.decay_data = None
+        for f in self.find_log_files("fusilli_preprocessing/decay_metrics"):
+            file_path = os.path.join(f["root"], f["fn"])
+            self.decay_data = parse_csv_file(file_path)
+            break
 
         # If no data found, exit
         if self.fusion_qc_data is None and self.sensitivity_data is None:
+            logger.debug("No detection data found - exiting module")
             raise UserWarning
+
+        # Log what we found
+        if self.fusion_qc_data is not None:
+            logger.info(f"Loaded fusion_qc_data: {len(self.fusion_qc_data)} rows")
+        if self.sensitivity_data is not None:
+            logger.info(f"Loaded sensitivity_data: {len(self.sensitivity_data)} rows")
 
         # Calculate detection efficiency metrics
         if self.fusion_qc_data is not None:
             self.calculate_detection_efficiency()
             self.calculate_coverage_metrics()
+            self.calculate_variant_called_retention()
 
         # Generate plots
         if self.fusion_qc_data is not None:
             self.detection_efficiency_plot()
             self.coverage_plot()
+            self.variant_called_retention_plot()
 
         if self.sensitivity_data is not None:
             self.sensitivity_plot()
@@ -116,23 +139,91 @@ class MultiqcModule(BaseModule):
                     self.fusion_qc_data["unique_fusions"] / self.fusion_qc_data["expected_fusions"]
                 ).fillna(0.0)
 
-        # Calculate breakpoint coverage (simplified - using unique_fusions as proxy)
+        # Calculate breakpoint coverage
+        # breakpoint_coverage uses a dedicated column if the pipeline provides it;
+        # otherwise it falls back to variant_coverage as a reasonable proxy.
         if "breakpoint_coverage" not in self.fusion_qc_data.columns:
-            if "unique_fusions" in self.fusion_qc_data.columns and "expected_fusions" in self.fusion_qc_data.columns:
-                # For now, use variant coverage as breakpoint coverage
-                # In future, could parse fusion_id to extract unique breakpoints
+            if "unique_breakpoints" in self.fusion_qc_data.columns and "expected_breakpoints" in self.fusion_qc_data.columns:
+                self.fusion_qc_data["breakpoint_coverage"] = (
+                    self.fusion_qc_data["unique_breakpoints"] / self.fusion_qc_data["expected_breakpoints"]
+                ).fillna(0.0)
+            elif "variant_coverage" in self.fusion_qc_data.columns:
                 self.fusion_qc_data["breakpoint_coverage"] = self.fusion_qc_data["variant_coverage"]
 
         # Calculate partner coverage
         if "partner_coverage" not in self.fusion_qc_data.columns:
             if "unique_partners_detected" in self.fusion_qc_data.columns:
-                # Assume we know expected partners from config, or use a reasonable estimate
-                # For now, use unique_partners_detected as a proxy
-                # NOTE: The divisor 100.0 is an arbitrary normalization factor.
-                # In production, this should be replaced with the actual expected number of partners.
+                # Use expected_partners if available; otherwise fall back to the
+                # per-sample max of unique_partners_detected (best available proxy).
+                if "expected_partners" in self.fusion_qc_data.columns:
+                    divisor = self.fusion_qc_data["expected_partners"]
+                else:
+                    max_detected = self.fusion_qc_data["unique_partners_detected"].max()
+                    divisor = max_detected if max_detected > 0 else 1
                 self.fusion_qc_data["partner_coverage"] = (
-                    self.fusion_qc_data["unique_partners_detected"] / 100.0
+                    self.fusion_qc_data["unique_partners_detected"] / divisor
                 ).clip(upper=1.0)
+
+    def calculate_variant_called_retention(self) -> None:
+        """
+        Fraction of raw reads that had a variant (fusion) called.
+        Requires decay_metrics (raw read count per sample) and fusion_qc (matched_reads).
+        """
+        if self.fusion_qc_data is None or self.decay_data is None:
+            return
+        raw = self.decay_data[self.decay_data["step"] == "raw"]
+        if raw.empty or "sample" not in raw.columns or "reads" not in raw.columns:
+            return
+        raw_per_sample = dict(zip(raw["sample"], raw["reads"]))
+        if "matched_reads" not in self.fusion_qc_data.columns or "sample" not in self.fusion_qc_data.columns:
+            return
+        retention = []
+        for _, row in self.fusion_qc_data.iterrows():
+            sample = row["sample"]
+            matched = row.get("matched_reads", 0) or 0
+            raw_reads = raw_per_sample.get(sample)
+            if raw_reads and raw_reads > 0:
+                retention.append(float(matched) / float(raw_reads))
+            else:
+                retention.append(0.0)
+        self.fusion_qc_data["variant_called_retention"] = retention
+
+    def variant_called_retention_plot(self) -> None:
+        """Plot fraction of raw reads that had a variant called (decay metric for variant-called reads)."""
+        if self.fusion_qc_data is None or "variant_called_retention" not in self.fusion_qc_data.columns:
+            return
+        plot_data = OrderedDict()
+        for _, row in self.fusion_qc_data.iterrows():
+            sample = row["sample"]
+            r = row.get("variant_called_retention")
+            if r is not None:
+                plot_data[sample] = {"Variant-called retention": float(r)}
+        if not plot_data:
+            return
+        pconfig = {
+            "id": "fusilli_variant_called_retention",
+            "title": "FUSILLI: Variant-called read retention (vs raw)",
+            "ylab": "Fraction of raw reads",
+            "xlab": "Sample",
+            "tt_label": "<b>{point.x}</b>: {point.y:.4f}",
+            "ymax": 1.0,
+            "ymin": 0.0,
+        }
+        self.add_section(
+            name="Variant-called read retention",
+            anchor="fusilli_variant_called_retention",
+            description="Fraction of raw reads that had a fusion variant called.",
+            helptext="""
+            This is the decay/retention metric for the subset of reads that contribute to a variant call:
+            **variant_called_retention** = matched_reads / raw_reads.
+
+            It answers: of all raw reads, what fraction ended up assigned to a fusion?
+            Low values indicate most reads are lost before or during detection.
+            """,
+            plot=bargraph.plot(
+                plot_data, cats=["Variant-called retention"], pconfig=pconfig
+            ),
+        )
 
     def detection_efficiency_plot(self) -> None:
         """Create detection efficiency multi-line plot."""
@@ -196,6 +287,12 @@ class MultiqcModule(BaseModule):
         if not plot_data:
             return
 
+        # Collect all categories that appear in the data
+        all_categories = set()
+        for sample_data in plot_data.values():
+            all_categories.update(sample_data.keys())
+        categories = list(all_categories)
+
         pconfig = {
             "id": "fusilli_library_coverage",
             "title": "FUSILLI: Library Coverage Metrics",
@@ -211,11 +308,16 @@ class MultiqcModule(BaseModule):
             description="Library representation coverage across samples.",
             helptext="""
             This plot shows coverage metrics for different aspects of the fusion library:
-            - **Variant Coverage**: Fraction of expected fusion variants detected
+            - **Variant Coverage**: Fraction of expected fusion variants detected (unique_fusions / expected_fusions)
             - **Breakpoint Coverage**: Fraction of expected breakpoint positions detected
             - **Partner Coverage**: Fraction of expected fusion partners detected
+
+            **observed_variants vs unique_fusions**: In the pipeline, both denote the number of
+            distinct fusion variants (fusion_id) with at least one read. They are the same for
+            fusion-only QC. If unfused variants were included, observed_variants would be
+            unique_fusions + unique_unfused (total variant types with ≥1 read).
             """,
-            plot=bargraph.plot(plot_data, pconfig),
+            plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
         )
 
     def sensitivity_plot(self) -> None:
@@ -293,8 +395,30 @@ class MultiqcModule(BaseModule):
                 "title": "Detection Efficiency",
                 "description": "Fraction of reads that matched fusions",
                 "format": "{:.3f}",
-                "max": 1.0,
-                "min": 0.0,
+                "ymax": 1.0,
+                "ymin": 0.0,
             }
 
-        self.general_stats_addcols(self.fusion_qc_data, headers)
+        if "variant_called_retention" in self.fusion_qc_data.columns:
+            headers["variant_called_retention"] = {
+                "title": "Variant retention (vs raw)",
+                "description": "Fraction of raw reads that had a fusion variant called",
+                "format": "{:.4f}",
+                "ymax": 1.0,
+                "ymin": 0.0,
+            }
+
+        if "unique_fusions" in self.fusion_qc_data.columns:
+            headers["unique_fusions"] = {
+                "title": "Unique fusions",
+                "description": "Distinct fusion variants (fusion_id) with ≥1 read; same as observed_variants for fusions",
+                "format": "{:,.0f}",
+            }
+
+        # Ensure DataFrame has 'sample' column as index for general_stats_addcols
+        if "sample" in self.fusion_qc_data.columns:
+            stats_data = self.fusion_qc_data.set_index("sample")
+        else:
+            stats_data = self.fusion_qc_data
+
+        self.general_stats_addcols(stats_data, headers)

@@ -27,14 +27,20 @@ def parse_csv_file(file_path: str) -> Optional[pd.DataFrame]:
         pandas DataFrame or None if file doesn't exist or parsing fails
     """
     try:
-        if not Path(file_path).exists():
+        file_path_obj = Path(file_path)
+        if not file_path_obj.exists():
             logger.warning(f"File not found: {file_path}")
             return None
         df = pd.read_csv(file_path)
-        logger.info(f"Parsed {len(df)} rows from {file_path}")
+        if df.empty:
+            logger.warning(f"CSV file is empty: {file_path}")
+            return None
+        logger.info(f"Parsed {len(df)} rows, {len(df.columns)} columns from {file_path}")
         return df
     except Exception as e:
         logger.error(f"Error parsing CSV file {file_path}: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
         return None
 
 

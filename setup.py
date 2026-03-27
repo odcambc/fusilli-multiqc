@@ -27,6 +27,9 @@ setup(
             "fusilli_preprocessing = fusilli_multiqc.modules.preprocessing:MultiqcModule",
             "fusilli_partners = fusilli_multiqc.modules.partners:MultiqcModule",
         ],
+        "multiqc.hooks.v1": [
+            "execution_start = fusilli_multiqc.hooks:execution_start",
+        ],
     },
     classifiers=[
         "Development Status :: 4 - Beta",

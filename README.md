@@ -98,6 +98,33 @@ Visualizes:
 - **Partner Coverage**: Number of samples with detection per partner
 - **Partner End vs Linker**: Comparison of detection methods
 
+## Testing
+
+See [TESTING.md](TESTING.md) for detailed instructions on:
+- Testing the installation locally
+- Integrating with Snakemake conda environments
+- Verifying entry point registration
+- Troubleshooting common issues
+
+Quick test after installation:
+```bash
+python test_installation.py
+```
+
+## Local Testing
+
+For testing the plugin locally before using it in Snakemake, see [LOCAL_TESTING.md](LOCAL_TESTING.md).
+
+Quick start:
+```bash
+# Create and activate test environment
+./setup_local_test_env.sh
+conda activate fusilli-multiqc-test
+
+# Verify installation
+python test_installation.py
+```
+
 ## Development
 
 ### Package Structure

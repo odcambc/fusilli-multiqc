@@ -24,9 +24,15 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
-    "multiqc>=1.0",
+    "multiqc>=1.25,<2.0",
     "pandas>=1.0",
     "numpy>=1.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-cov",
 ]
 
 [project.entry-points."multiqc.modules.v1"]
@@ -35,5 +41,14 @@ fusilli_diversity = "fusilli_multiqc.modules.diversity:MultiqcModule"
 fusilli_preprocessing = "fusilli_multiqc.modules.preprocessing:MultiqcModule"
 fusilli_partners = "fusilli_multiqc.modules.partners:MultiqcModule"
 
+[project.entry-points."multiqc.hooks.v1"]
+execution_start = "fusilli_multiqc.hooks:execution_start"
+
 [tool.setuptools]
 packages = ["fusilli_multiqc", "fusilli_multiqc.modules"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests that run full multiqc (deselect with '-m \"not integration\"')",
+]

@@ -9,20 +9,23 @@ This module visualizes:
 
 import logging
 from collections import OrderedDict
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 import numpy as np
 import pandas as pd
 
-from multiqc.modules.base_module import BaseModule
+from multiqc.base_module import BaseMultiqcModule
 from multiqc.plots import heatmap, bargraph, scatter
 
 from fusilli_multiqc.utils import parse_csv_file
 
 logger = logging.getLogger(__name__)
 
+import os
 
-class MultiqcModule(BaseModule):
+
+class MultiqcModule(BaseMultiqcModule):
     """
     FUSILLI Partner Detection Module
 
@@ -40,10 +43,12 @@ class MultiqcModule(BaseModule):
         # Find and parse input files
         self.partner_data = None
 
-        # Find partner_counts_summary.csv
-        for f in self.find_log_files("partner_counts_summary.csv"):
-            self.partner_data = parse_csv_file(f["fn"])
+        # Search for partner_counts_summary.csv using registered pattern
+        for f in self.find_log_files("fusilli_partners/partner_counts"):
+            file_path = os.path.join(f["root"], f["fn"])
+            self.partner_data = parse_csv_file(file_path)
             if self.partner_data is not None:
+                self.add_data_source(f)
                 break
 
         # If no data found, exit
@@ -164,9 +169,9 @@ class MultiqcModule(BaseModule):
             "xlab": "Partner",
             "ylab": "Sample",
             "square": False,
-            "colstops": [
-                {"0": "#ffffff", "1": "#1f77b4"},
-            ],
+            "cluster_rows": False,
+            "cluster_cols": False,
+            "colstops": [[0, "#ffffff"], [1, "#1f77b4"]],
         }
 
         self.add_section(
@@ -192,12 +197,10 @@ class MultiqcModule(BaseModule):
         if partner_coverage is None or partner_coverage.empty:
             return
 
-        # Sort by number of samples detected
-        # NOTE: Limit to top 50 partners for readability in the plot.
-        # This is a hardcoded limit that could be made configurable in the future.
+        # Sort by detection frequency; show all partners (no arbitrary cutoff)
         partner_coverage = partner_coverage.sort_values(
             "samples_detected", ascending=False
-        ).head(50)
+        )
 
         plot_data = OrderedDict()
         for _, row in partner_coverage.iterrows():
@@ -207,25 +210,29 @@ class MultiqcModule(BaseModule):
         if not plot_data:
             return
 
+        # Collect all categories
+        all_categories = set()
+        for sample_data in plot_data.values():
+            all_categories.update(sample_data.keys())
+        categories = list(all_categories)
+
         pconfig = {
             "id": "fusilli_partner_coverage",
-            "title": "FUSILLI: Partner Coverage (Top 50)",
+            "title": "FUSILLI: Partner Coverage",
             "ylab": "Number of Samples with Detection",
             "xlab": "Partner",
             "tt_label": "<b>{point.x}</b><br>{point.y} samples",
-            "rotate_labels": True,
         }
 
         self.add_section(
             name="Partner Coverage",
             anchor="fusilli_partner_coverage",
-            description="Number of samples with detection per partner (top 50).",
+            description="Number of samples with detection per partner.",
             helptext="""
             This plot shows how many samples have detected each partner.
             Partners are sorted by detection frequency (most common first).
-            Only the top 50 partners are shown for readability.
             """,
-            plot=bargraph.plot(plot_data, pconfig),
+            plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
         )
 
     def partner_end_vs_linker_plot(self) -> None:
