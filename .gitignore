@@ -1,6 +1,5 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
-__pycache__/
 *.py[cod]
 *$py.class
 
@@ -36,3 +35,9 @@ coverage.xml
 .vscode/
 .DS_Store
 Thumbs.db
+
+# MultiQC output
+multiqc_report/
+multiqc_data/
+multiqc_report.html
+*.log

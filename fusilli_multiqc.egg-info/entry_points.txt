@@ -1,5 +1,0 @@
-[multiqc.modules.v1]
-fusilli_detection = fusilli_multiqc.modules.detection:MultiqcModule
-fusilli_diversity = fusilli_multiqc.modules.diversity:MultiqcModule
-fusilli_partners = fusilli_multiqc.modules.partners:MultiqcModule
-fusilli_preprocessing = fusilli_multiqc.modules.preprocessing:MultiqcModule
