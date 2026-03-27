@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from multiqc.base_module import BaseMultiqcModule
-from multiqc.plots import linegraph, bargraph, scatter
+from multiqc.plots import linegraph, bargraph
 
 from fusilli_multiqc.utils import parse_csv_file
 
@@ -61,7 +61,6 @@ class MultiqcModule(BaseMultiqcModule):
 
         # Generate plots
         if self.diversity_metrics is not None and not self.diversity_metrics.empty:
-            self.diversity_comparison_plot()
             self.evenness_plot()
             self.rank_abundance_plot()
             self.variant_count_distribution_plot()
@@ -105,8 +104,6 @@ class MultiqcModule(BaseMultiqcModule):
             if total_counts == 0:
                 metrics_list.append({
                     "sample": sample,
-                    "shannon_diversity": 0.0,
-                    "simpson_diversity": 0.0,
                     "evenness": 0.0,
                     "top1_fraction": 0.0,
                     "top5_fraction": 0.0,
@@ -121,8 +118,6 @@ class MultiqcModule(BaseMultiqcModule):
             if len(non_zero_counts) == 0:
                 metrics_list.append({
                     "sample": sample,
-                    "shannon_diversity": 0.0,
-                    "simpson_diversity": 0.0,
                     "evenness": 0.0,
                     "top1_fraction": 0.0,
                     "top5_fraction": 0.0,
@@ -137,9 +132,6 @@ class MultiqcModule(BaseMultiqcModule):
 
             # Shannon diversity: H' = -Σ(p_i * ln(p_i))
             shannon = -np.sum(proportions * np.log(proportions))
-
-            # Simpson diversity: 1 - Σ(p_i²)
-            simpson = 1 - np.sum(proportions ** 2)
 
             # Evenness: H' / ln(S) where S is number of observed variants
             observed_variants = len(non_zero_counts)
@@ -157,8 +149,6 @@ class MultiqcModule(BaseMultiqcModule):
 
             metrics_list.append({
                 "sample": sample,
-                "shannon_diversity": float(shannon),
-                "simpson_diversity": float(simpson),
                 "evenness": float(evenness),
                 "top1_fraction": float(top1 / total_counts),
                 "top5_fraction": float(top5 / total_counts),
@@ -168,50 +158,6 @@ class MultiqcModule(BaseMultiqcModule):
             })
 
         return pd.DataFrame(metrics_list)
-
-    def diversity_comparison_plot(self) -> None:
-        """Create diversity comparison bar chart."""
-        if self.diversity_metrics is None or self.diversity_metrics.empty:
-            return
-
-        plot_data = OrderedDict()
-        for _, row in self.diversity_metrics.iterrows():
-            sample = row["sample"]
-            plot_data[sample] = {
-                "Shannon Diversity": row["shannon_diversity"],
-                "Simpson Diversity": row["simpson_diversity"],
-            }
-
-        if not plot_data:
-            return
-
-        # Collect all categories
-        all_categories = set()
-        for sample_data in plot_data.values():
-            all_categories.update(sample_data.keys())
-        categories = list(all_categories)
-
-        pconfig = {
-            "id": "fusilli_diversity_comparison",
-            "title": "FUSILLI: Diversity Index Comparison",
-            "ylab": "Diversity Index",
-            "xlab": "Sample",
-            "stacking": None,
-        }
-
-        self.add_section(
-            name="Diversity Comparison",
-            anchor="fusilli_diversity_comparison",
-            description="Shannon and Simpson diversity indices across samples.",
-            helptext="""
-            This plot compares two diversity metrics:
-            - **Shannon Diversity**: Measures both richness and evenness (higher = more diverse)
-            - **Simpson Diversity**: Measures dominance (higher = less dominance, more diverse)
-
-            Higher values indicate greater library diversity.
-            """,
-            plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
-        )
 
     def evenness_plot(self) -> None:
         """Create evenness bar chart."""
@@ -375,16 +321,6 @@ class MultiqcModule(BaseMultiqcModule):
             return
 
         headers = OrderedDict()
-        headers["shannon_diversity"] = {
-            "title": "Shannon Diversity",
-            "description": "Shannon diversity index (H')",
-            "format": "{:.3f}",
-        }
-        headers["simpson_diversity"] = {
-            "title": "Simpson Diversity",
-            "description": "Simpson diversity index (1-D)",
-            "format": "{:.3f}",
-        }
         headers["evenness"] = {
             "title": "Evenness",
             "description": "Pielou's evenness index",

@@ -121,6 +121,20 @@ class TestDetectionModule:
         assert "Detection Efficiency" in section_names
         assert "Library Coverage" in section_names
 
+    def test_sensitivity_columns_present(self):
+        module, _, _ = self._make_module()
+        df = module.sensitivity_data
+        assert "matching_efficiency" in df.columns
+        assert "end_to_end_efficiency" in df.columns
+
+    def test_sensitivity_efficiencies_bounded(self):
+        module, _, _ = self._make_module()
+        df = module.sensitivity_data
+        assert (df["matching_efficiency"] >= 0).all()
+        assert (df["end_to_end_efficiency"] >= 0).all()
+        # end_to_end <= matching (merge rate <= 1)
+        assert (df["end_to_end_efficiency"] <= df["matching_efficiency"] + 1e-9).all()
+
     def test_general_stats_added(self):
         _, _, mock_stats = self._make_module()
         assert mock_stats.called

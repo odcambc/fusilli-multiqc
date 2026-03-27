@@ -12,7 +12,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from multiqc.base_module import BaseMultiqcModule
-from multiqc.plots import linegraph, bargraph, scatter
+from multiqc.plots import linegraph, bargraph
 
 from fusilli_multiqc.utils import parse_csv_file
 
@@ -323,41 +323,60 @@ class MultiqcModule(BaseMultiqcModule):
         )
 
     def sensitivity_plot(self) -> None:
-        """Create sensitivity analysis scatter plot."""
+        """Create detection efficiency bar chart showing matching and end-to-end efficiency."""
         if self.sensitivity_data is None or "sample" not in self.sensitivity_data.columns:
+            return
+
+        has_matching = "matching_efficiency" in self.sensitivity_data.columns
+        has_e2e = "end_to_end_efficiency" in self.sensitivity_data.columns
+        if not has_matching and not has_e2e:
             return
 
         plot_data = OrderedDict()
         for _, row in self.sensitivity_data.iterrows():
             sample = row["sample"]
-            plot_data[sample] = {
-                "x": row.get("expected_detection_fraction", 0.0),
-                "y": row.get("sensitivity_index", 0.0),
-            }
+            entry = {}
+            if has_matching:
+                entry["Matching Efficiency"] = float(row.get("matching_efficiency", 0.0))
+            if has_e2e:
+                entry["End-to-End Efficiency"] = float(row.get("end_to_end_efficiency", 0.0))
+            plot_data[sample] = entry
 
         if not plot_data:
             return
 
+        categories = []
+        if has_matching:
+            categories.append("Matching Efficiency")
+        if has_e2e:
+            categories.append("End-to-End Efficiency")
+
         pconfig = {
             "id": "fusilli_sensitivity",
-            "title": "FUSILLI: Sensitivity Analysis",
-            "ylab": "Sensitivity Index",
-            "xlab": "Expected Detection Fraction",
-            "tt_label": "<b>{point.sample}</b><br>Expected: {point.x:.3f}<br>Sensitivity: {point.y:.3f}",
+            "title": "FUSILLI: Detection Efficiency",
+            "ylab": "Efficiency",
+            "ymax": 1.0,
+            "ymin": 0.0,
+            "stacking": None,
         }
 
         self.add_section(
-            name="Sensitivity Analysis",
+            name="Detection Efficiency",
             anchor="fusilli_sensitivity",
-            description="Sensitivity index vs expected detection fraction.",
+            description="Matching efficiency and end-to-end efficiency per sample.",
             helptext="""
-            This plot shows the relationship between:
-            - **Expected Detection Fraction**: Fraction of reads expected to be long enough to detect breakpoints
-            - **Sensitivity Index**: Ratio of actual detections to expected detections
+            Two complementary efficiency metrics, both corrected for the fraction of fragments
+            geometrically capable of covering a breakpoint k-mer:
 
-            Values closer to 1.0 indicate good sensitivity.
+            - **Matching Efficiency**: detections / (merged reads × coverage probability).
+              Measures how well the detector performs on reads that actually reached it.
+            - **End-to-End Efficiency**: detections / (raw read pairs × coverage probability).
+              Measures pipeline-wide yield from input material to final detection.
+
+            The ratio between them equals the merge rate, which is also visible in the Read Decay plot.
+            Values closer to 1.0 indicate better performance.
             """,
-            plot=scatter.plot(plot_data, pconfig),
+            plot=bargraph.plot(plot_data, cats=categories, pconfig=pconfig),
         )
 
     def add_summary_table(self) -> None:

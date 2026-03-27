@@ -38,20 +38,7 @@ class TestDiversityModule:
         module, _, _ = self._make_module()
         dm = module.diversity_metrics
         assert dm is not None
-        assert "shannon_diversity" in dm.columns
-        assert "simpson_diversity" in dm.columns
         assert "evenness" in dm.columns
-
-    def test_shannon_diversity_positive(self):
-        module, _, _ = self._make_module()
-        dm = module.diversity_metrics
-        assert (dm["shannon_diversity"] >= 0).all()
-
-    def test_simpson_diversity_bounded(self):
-        module, _, _ = self._make_module()
-        dm = module.diversity_metrics
-        assert (dm["simpson_diversity"] >= 0).all()
-        assert (dm["simpson_diversity"] <= 1).all()
 
     def test_evenness_bounded(self):
         module, _, _ = self._make_module()
@@ -72,7 +59,7 @@ class TestDiversityModule:
     def test_sections_added(self):
         _, mock_section, _ = self._make_module()
         section_names = [call.kwargs.get("name") for call in mock_section.call_args_list]
-        assert "Diversity Comparison" in section_names
+        assert "Diversity Comparison" not in section_names
         assert "Evenness" in section_names
         assert "Rank-Abundance" in section_names
 

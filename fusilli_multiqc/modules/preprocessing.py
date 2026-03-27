@@ -179,13 +179,14 @@ class MultiqcModule(BaseMultiqcModule):
             "xlab": "Preprocessing Step",
             "categories": True,
             "tt_label": "<b>{point.x}</b><br>{point.y:,.0f} reads",
-            "ylog": True,
+            "logswitch": True,
+            "logswitch_active": True,
         }
 
         self.add_section(
             name="Read Decay",
             anchor="fusilli_read_decay",
-            description="Read pairs at each preprocessing and detection step (log scale).",
+            description="Read pairs at each preprocessing and detection step.",
             helptext="""
             This plot shows read pair counts through the full pipeline
             (in order: raw → cleaned → trimmed → quality → merged → matched).
@@ -239,13 +240,14 @@ class MultiqcModule(BaseMultiqcModule):
             "xlab": "Preprocessing Step",
             "categories": True,
             "tt_label": "<b>{point.x}</b><br>{point.y:,.0f} bases",
-            "ylog": True,
+            "logswitch": True,
+            "logswitch_active": True,
         }
 
         self.add_section(
             name="Base Decay",
             anchor="fusilli_base_decay",
-            description="Total bases at each preprocessing step (log scale).",
+            description="Total bases at each preprocessing step.",
             helptext="""
             This plot shows total base counts through the preprocessing steps.
             Unlike read pairs, bases from R1 and R2 are tracked independently
