@@ -406,10 +406,7 @@ class MultiqcModule(BaseMultiqcModule):
             "ymin": 0.0,
         }
 
-        # Ensure DataFrame has 'sample' column as index for general_stats_addcols
         if "sample" in merged_data.columns:
-            stats_data = merged_data.set_index("sample")
-        else:
-            stats_data = merged_data
+            merged_data = merged_data.set_index("sample")
 
-        self.general_stats_addcols(stats_data, headers)
+        self.general_stats_addcols(merged_data.to_dict(orient="index"), headers)

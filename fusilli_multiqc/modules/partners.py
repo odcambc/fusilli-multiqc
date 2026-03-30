@@ -58,11 +58,12 @@ class MultiqcModule(BaseMultiqcModule):
         # Process partner data
         self.processed_data = self.process_partner_data()
 
-        # Generate plots
+        # Generate plots and summary table
         if self.processed_data is not None:
             self.partner_detection_heatmap()
             self.partner_coverage_plot()
             self.partner_end_vs_linker_plot()
+            self.add_summary_table()
 
     def process_partner_data(self) -> Optional[Dict[str, Any]]:
         """
@@ -277,3 +278,60 @@ class MultiqcModule(BaseMultiqcModule):
             """,
             plot=scatter.plot(plot_data, pconfig),
         )
+
+    def add_summary_table(self) -> None:
+        """Add partner detection metrics to general stats table."""
+        if self.processed_data is None:
+            return
+
+        detection_matrix = self.processed_data["detection_matrix"]
+        end_linker_data = self.processed_data["end_linker_data"]
+        samples = self.processed_data["samples"]
+
+        if not detection_matrix or not samples:
+            return
+
+        # Per-sample: unique partners detected and total end/linker counts
+        stats_rows = []
+        for sample in samples:
+            partners_detected = sum(
+                1 for partner in detection_matrix
+                if detection_matrix[partner].get(sample, 0) > 0
+            )
+            row = {"sample": sample, "partners_detected": partners_detected}
+
+            if end_linker_data is not None and not end_linker_data.empty:
+                sample_row = end_linker_data[end_linker_data["sample"] == sample]
+                if not sample_row.empty:
+                    row["end_counts"] = int(sample_row.iloc[0]["end_counts"])
+                    row["linker_counts"] = int(sample_row.iloc[0]["linker_counts"])
+
+            stats_rows.append(row)
+
+        if not stats_rows:
+            return
+
+        import pandas as pd
+        stats_data = pd.DataFrame(stats_rows).set_index("sample").to_dict(orient="index")
+
+        headers = OrderedDict()
+        headers["partners_detected"] = {
+            "title": "Partners Detected",
+            "description": "Number of unique fusion partners detected",
+            "format": "{:,.0f}",
+        }
+        first_sample = next(iter(stats_data.values()), {})
+        if "end_counts" in first_sample:
+            headers["end_counts"] = {
+                "title": "Partner End Reads",
+                "description": "Total reads matching partner domain 3' end sequences",
+                "format": "{:,.0f}",
+            }
+        if "linker_counts" in first_sample:
+            headers["linker_counts"] = {
+                "title": "Partner Linker Reads",
+                "description": "Total reads matching partner linker sequences",
+                "format": "{:,.0f}",
+            }
+
+        self.general_stats_addcols(stats_data, headers)

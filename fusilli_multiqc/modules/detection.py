@@ -436,10 +436,27 @@ class MultiqcModule(BaseMultiqcModule):
                 "format": "{:,.0f}",
             }
 
-        # Ensure DataFrame has 'sample' column as index for general_stats_addcols
+        if "variant_coverage" in self.fusion_qc_data.columns:
+            headers["variant_coverage"] = {
+                "title": "Variant Coverage",
+                "description": "Fraction of expected fusion variants detected",
+                "format": "{:.3f}",
+                "ymax": 1.0,
+                "ymin": 0.0,
+            }
+
+        if "partner_coverage" in self.fusion_qc_data.columns:
+            headers["partner_coverage"] = {
+                "title": "Partner Coverage",
+                "description": "Fraction of expected fusion partners detected",
+                "format": "{:.3f}",
+                "ymax": 1.0,
+                "ymin": 0.0,
+            }
+
         if "sample" in self.fusion_qc_data.columns:
             stats_data = self.fusion_qc_data.set_index("sample")
         else:
             stats_data = self.fusion_qc_data
 
-        self.general_stats_addcols(stats_data, headers)
+        self.general_stats_addcols(stats_data.to_dict(orient="index"), headers)

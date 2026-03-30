@@ -333,11 +333,17 @@ class MultiqcModule(BaseMultiqcModule):
             "description": "Number of unique variants detected",
             "format": "{:,.0f}",
         }
+        headers["top1_fraction"] = {
+            "title": "Top Variant Fraction",
+            "description": "Fraction of total counts from the single most abundant variant",
+            "format": "{:.3f}",
+            "ymax": 1.0,
+            "ymin": 0.0,
+        }
 
-        # Ensure DataFrame has 'sample' column as index for general_stats_addcols
         if "sample" in self.diversity_metrics.columns:
             stats_data = self.diversity_metrics.set_index("sample")
         else:
             stats_data = self.diversity_metrics
 
-        self.general_stats_addcols(stats_data, headers)
+        self.general_stats_addcols(stats_data.to_dict(orient="index"), headers)
