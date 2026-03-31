@@ -44,8 +44,8 @@ fusilli_partners = "fusilli_multiqc.modules.partners:MultiqcModule"
 [project.entry-points."multiqc.hooks.v1"]
 execution_start = "fusilli_multiqc.hooks:execution_start"
 
-[tool.setuptools]
-packages = ["fusilli_multiqc", "fusilli_multiqc.modules"]
+[tool.setuptools.packages.find]
+include = ["fusilli_multiqc*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
